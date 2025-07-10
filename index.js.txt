@@ -1,0 +1,54 @@
+const crypto = require('crypto');
+
+// This is the main entry point for your webhook function
+module.exports = async (req, res) => {
+  // Get the secrets from your environment variables
+  const secret = req.variables.PAYSTACK_WEBHOOK_SECRET;
+
+  // 1. Verify the request is actually from Paystack
+  const hash = crypto.createHmac('sha512', secret)
+                     .update(JSON.stringify(req.body))
+                     .digest('hex');
+  
+  if (hash !== req.headers['x-paystack-signature']) {
+    // If the signature doesn't match, it's a fake request. Stop immediately.
+    console.error("Invalid webhook signature.");
+    return res.send('Invalid signature', 401);
+  }
+
+  // 2. If the signature is valid, get the event data
+  const event = req.body;
+
+  // 3. Check if the payment was successful
+  if (event.event === 'charge.success') {
+    const { amount, customer } = event.data;
+    const userEmail = customer.email;
+    const amountPaid = amount / 100; // Convert from kobo/pesewas back to main currency
+
+    try {
+      // TODO: In a real app, you would look up the user by their email,
+      // determine their country, and update the correct balance (GHS or NGN).
+      // For this example, we assume you'll add this logic later.
+
+      console.log(`Successfully charged ${userEmail} an amount of ${amountPaid}`);
+      
+      // Here is where you would write the code to update the user's balance
+      // in your Appwrite database.
+      // Example (pseudo-code):
+      // const user = await databases.findUserByEmail(userEmail);
+      // await databases.updateDocument('users', user.$id, {
+      //   balance: user.balance + amountPaid
+      // });
+
+    } catch (dbError) {
+      console.error("Database update failed:", dbError);
+      // Even if the DB fails, we must tell Paystack we received the event
+      // to prevent them from sending it again.
+      return res.send('Webhook received, but DB update failed.', 500);
+    }
+  }
+
+  // 4. Send a success response to Paystack
+  // This tells Paystack "I have received the event, don't send it again."
+  res.send('Webhook received successfully', 200);
+};
