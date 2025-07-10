@@ -1,54 +1,90 @@
 const crypto = require('crypto');
+// We need to import the Appwrite SDK to talk to our database
+const sdk = require('node-appwrite');
 
-// This is the main entry point for your webhook function
 module.exports = async (req, res) => {
-  // Get the secrets from your environment variables
-  const secret = req.variables.PAYSTACK_WEBHOOK_SECRET;
+  // --- Setup: Initialize the Appwrite SDK ---
+  const client = new sdk.Client()
+    .setEndpoint(req.variables.APPWRITE_FUNCTION_ENDPOINT)
+    .setProject(req.variables.APPWRITE_FUNCTION_PROJECT_ID)
+    .setKey(req.variables.APPWRITE_API_KEY); // A special API key for server-side tasks
 
-  // 1. Verify the request is actually from Paystack
+  const databases = new sdk.Databases(client);
+
+  // --- Step 1: Verify the webhook is from Paystack ---
+  const secret = req.variables.PAYSTACK_WEBHOOK_SECRET;
   const hash = crypto.createHmac('sha512', secret)
                      .update(JSON.stringify(req.body))
                      .digest('hex');
   
   if (hash !== req.headers['x-paystack-signature']) {
-    // If the signature doesn't match, it's a fake request. Stop immediately.
     console.error("Invalid webhook signature.");
     return res.send('Invalid signature', 401);
   }
 
-  // 2. If the signature is valid, get the event data
   const event = req.body;
 
-  // 3. Check if the payment was successful
+  // --- Step 2: Check if the payment was successful ---
   if (event.event === 'charge.success') {
-    const { amount, customer } = event.data;
+    const { amount, customer, currency } = event.data;
     const userEmail = customer.email;
     const amountPaid = amount / 100; // Convert from kobo/pesewas back to main currency
 
     try {
-      // TODO: In a real app, you would look up the user by their email,
-      // determine their country, and update the correct balance (GHS or NGN).
-      // For this example, we assume you'll add this logic later.
+      // --- Step 3: Find the user in our database by their email ---
+      console.log(`Searching for user with email: ${userEmail}`);
+      const userResponse = await databases.listDocuments(
+        'afripay_db', // Your Database ID
+        'users',      // Your 'users' Collection ID
+        [
+          sdk.Query.equal('email', userEmail)
+        ]
+      );
 
-      console.log(`Successfully charged ${userEmail} an amount of ${amountPaid}`);
-      
-      // Here is where you would write the code to update the user's balance
-      // in your Appwrite database.
-      // Example (pseudo-code):
-      // const user = await databases.findUserByEmail(userEmail);
-      // await databases.updateDocument('users', user.$id, {
-      //   balance: user.balance + amountPaid
-      // });
+      if (userResponse.total === 0) {
+        throw new Error(`User with email ${userEmail} not found.`);
+      }
+
+      const user = userResponse.documents[0];
+      const userId = user.$id;
+      const userCountry = user.country;
+
+      // --- Step 4: Calculate the new balance ---
+      let newBalance;
+      let balanceFieldToUpdate;
+
+      if (userCountry === 'ghana' && currency === 'GHS') {
+        newBalance = user.balanceGHS + amountPaid;
+        balanceFieldToUpdate = 'balanceGHS';
+      } else if (userCountry === 'nigeria' && currency === 'NGN') {
+        newBalance = user.balanceNGN + amountPaid;
+        balanceFieldToUpdate = 'balanceNGN';
+      } else {
+        // Handle cases where currency doesn't match country, if necessary
+        throw new Error(`Currency mismatch for user ${userEmail}. Expected ${userCountry} currency.`);
+      }
+
+      // --- Step 5: Update the user's document with the new balance ---
+      console.log(`Updating balance for user ${userId}. New balance: ${newBalance}`);
+      await databases.updateDocument(
+        'afripay_db',
+        'users',
+        userId,
+        {
+          [balanceFieldToUpdate]: newBalance
+        }
+      );
+
+      console.log(`Successfully updated balance for ${userEmail}.`);
 
     } catch (dbError) {
-      console.error("Database update failed:", dbError);
+      console.error("Database operation failed:", dbError);
       // Even if the DB fails, we must tell Paystack we received the event
       // to prevent them from sending it again.
-      return res.send('Webhook received, but DB update failed.', 500);
+      return res.send(`Webhook received, but failed to process: ${dbError.message}`, 500);
     }
   }
 
-  // 4. Send a success response to Paystack
-  // This tells Paystack "I have received the event, don't send it again."
+  // --- Final Step: Tell Paystack everything is okay ---
   res.send('Webhook received successfully', 200);
 };
