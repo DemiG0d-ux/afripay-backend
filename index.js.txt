@@ -1,13 +1,12 @@
 const crypto = require('crypto');
-// We need to import the Appwrite SDK to talk to our database
 const sdk = require('node-appwrite');
 
 module.exports = async (req, res) => {
-  // --- Setup: Initialize the Appwrite SDK ---
+  // --- Setup ---
   const client = new sdk.Client()
     .setEndpoint(req.variables.APPWRITE_FUNCTION_ENDPOINT)
     .setProject(req.variables.APPWRITE_FUNCTION_PROJECT_ID)
-    .setKey(req.variables.APPWRITE_API_KEY); // A special API key for server-side tasks
+    .setKey(req.variables.APPWRITE_API_KEY);
 
   const databases = new sdk.Databases(client);
 
@@ -26,19 +25,16 @@ module.exports = async (req, res) => {
 
   // --- Step 2: Check if the payment was successful ---
   if (event.event === 'charge.success') {
-    const { amount, customer, currency } = event.data;
+    const { amount, customer, currency, reference } = event.data;
     const userEmail = customer.email;
-    const amountPaid = amount / 100; // Convert from kobo/pesewas back to main currency
+    const amountPaid = amount / 100;
 
     try {
-      // --- Step 3: Find the user in our database by their email ---
-      console.log(`Searching for user with email: ${userEmail}`);
+      // --- Step 3: Find the user in our database ---
       const userResponse = await databases.listDocuments(
-        'afripay_db', // Your Database ID
-        'users',      // Your 'users' Collection ID
-        [
-          sdk.Query.equal('email', userEmail)
-        ]
+        'afripay_db',
+        'users',
+        [sdk.Query.equal('email', userEmail)]
       );
 
       if (userResponse.total === 0) {
@@ -49,7 +45,7 @@ module.exports = async (req, res) => {
       const userId = user.$id;
       const userCountry = user.country;
 
-      // --- Step 4: Calculate the new balance ---
+      // --- Step 4: Calculate and update the new balance ---
       let newBalance;
       let balanceFieldToUpdate;
 
@@ -60,31 +56,40 @@ module.exports = async (req, res) => {
         newBalance = user.balanceNGN + amountPaid;
         balanceFieldToUpdate = 'balanceNGN';
       } else {
-        // Handle cases where currency doesn't match country, if necessary
-        throw new Error(`Currency mismatch for user ${userEmail}. Expected ${userCountry} currency.`);
+        throw new Error(`Currency mismatch for user ${userEmail}.`);
       }
 
-      // --- Step 5: Update the user's document with the new balance ---
-      console.log(`Updating balance for user ${userId}. New balance: ${newBalance}`);
       await databases.updateDocument(
         'afripay_db',
         'users',
         userId,
+        { [balanceFieldToUpdate]: newBalance }
+      );
+      
+      // --- NEW & FINAL STEP: Create the transaction receipt ---
+      console.log(`Creating transaction record for user ${userId}`);
+      await databases.createDocument(
+        'afripay_db',
+        'transactions',
+        sdk.ID.unique(), // Let Appwrite create a unique ID for the receipt
         {
-          [balanceFieldToUpdate]: newBalance
-        }
+          'description': `Wallet Funding via Paystack`,
+          'amount': amountPaid,
+          'type': 'credit', // 'credit' means money came IN
+          'status': 'Completed',
+          'userId': userId, // Link the receipt to the user
+        },
+        // Set permissions so only the user can read their own receipt
+        [sdk.Permission.read(sdk.Role.user(userId))]
       );
 
-      console.log(`Successfully updated balance for ${userEmail}.`);
+      console.log(`Successfully processed payment for ${userEmail}.`);
 
     } catch (dbError) {
       console.error("Database operation failed:", dbError);
-      // Even if the DB fails, we must tell Paystack we received the event
-      // to prevent them from sending it again.
       return res.send(`Webhook received, but failed to process: ${dbError.message}`, 500);
     }
   }
 
-  // --- Final Step: Tell Paystack everything is okay ---
   res.send('Webhook received successfully', 200);
 };
