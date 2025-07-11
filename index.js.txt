@@ -1,6 +1,6 @@
 const sdk = require('node-appwrite');
 
-// This is the main entry point for the function
+// This is the main entry point for the bill payment function
 module.exports = async (req, res) => {
   // --- Setup: Initialize the Appwrite SDK ---
   const client = new sdk.Client()
@@ -12,57 +12,48 @@ module.exports = async (req, res) => {
 
   try {
     // --- Step 1: Get the data sent from the Flutter app ---
-    const { planId, amount, currency } = JSON.parse(req.payload);
-    const userId = req.variables.APPWRITE_FUNCTION_USER_ID; // The ID of the user calling the function
+    const { biller, amount, customerId, currency } = JSON.parse(req.payload);
+    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
 
-    if (!planId || !amount || amount <= 0) {
-      throw new Error("Invalid plan ID or amount.");
+    if (!biller || !amount || amount <= 0 || !customerId) {
+      throw new Error("Invalid biller information provided.");
     }
 
-    // --- Step 2: Get the user's document and the specific savings plan document ---
-    const [userDoc, planDoc] = await Promise.all([
-      databases.getDocument('afripay_db', 'users', userId),
-      databases.getDocument('afripay_db', 'savings_plans', planId)
-    ]);
-
-    // --- Step 3: Security Check - Make sure the user owns this savings plan ---
-    if (planDoc.userId !== userId) {
-      throw new Error("Permission denied. You do not own this savings plan.");
-    }
-
+    // --- Step 2: Get the user's document to check their balance ---
+    const userDoc = await databases.getDocument('afripay_db', 'users', userId);
     const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
 
-    // --- Step 4: Check if the user has enough money in their main balance ---
+    // --- Step 3: Check if the user has enough money ---
     if (userDoc[balanceField] < amount) {
-      throw new Error("Insufficient funds in your main wallet.");
+      throw new Error("Insufficient funds.");
     }
 
-    // --- Step 5: Calculate the new balances ---
-    const newMainBalance = userDoc[balanceField] - amount;
-    const newPlanBalance = planDoc.currentBalance + amount;
+    // --- Step 4: (SIMULATION) Call the Bill Payment Provider ---
+    // In a real app, you would use 'node-fetch' here to call the Paystack API
+    // or another aggregator to verify the customerId and make the payment.
+    // For this guide, we will assume the payment is always successful if the user has funds.
+    console.log(`Simulating payment of ${amount} ${currency} for ${biller} to customer ${customerId}.`);
 
-    // --- Step 6: Update both the user's wallet and the savings plan securely ---
-    await Promise.all([
-      // Subtract from main wallet
-      databases.updateDocument('afripay_db', 'users', userId, { [balanceField]: newMainBalance }),
-      // Add to savings plan
-      databases.updateDocument('afripay_db', 'savings_plans', planId, { 'currentBalance': newPlanBalance })
-    ]);
+    // --- Step 5: Subtract the amount from the user's balance ---
+    const newBalance = userDoc[balanceField] - amount;
+    await databases.updateDocument('afripay_db', 'users', userId, {
+      [balanceField]: newBalance
+    });
 
-    // --- Step 7: Create a transaction record for this internal transfer ---
+    // --- Step 6: Create a transaction record for the bill payment ---
     await databases.createDocument('afripay_db', 'transactions', sdk.ID.unique(), {
-      'description': `Funding for Ajo/Susu: ${planDoc.planName}`,
+      'description': `${biller} Payment`,
       'amount': amount,
-      'type': 'debit', // Money is LEAVING the main wallet
+      'type': 'debit',
       'status': 'Completed',
       'userId': userId,
     }, [sdk.Permission.read(sdk.Role.user(userId))]);
 
-    console.log(`Successfully funded plan ${planId} for user ${userId}`);
-    res.json({ success: true, message: 'Plan funded successfully!' });
+    console.log(`Successfully paid bill for user ${userId}`);
+    res.json({ success: true, message: 'Bill paid successfully!' });
 
   } catch (error) {
-    console.error("Funding failed:", error);
+    console.error("Bill payment failed:", error);
     res.json({ success: false, message: error.message }, 400);
   }
 };
