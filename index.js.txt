@@ -2,6 +2,8 @@ const sdk = require('node-appwrite');
 
 // This function runs automatically AFTER a user is created.
 module.exports = async (req, res) => {
+  console.log("Function triggered by user creation event.");
+
   // Setup the Appwrite SDK
   const client = new sdk.Client()
     .setEndpoint(req.variables.APPWRITE_FUNCTION_ENDPOINT)
@@ -13,11 +15,22 @@ module.exports = async (req, res) => {
   try {
     // Appwrite automatically provides the new user's data in the payload
     const user = JSON.parse(req.payload);
+    console.log(`Payload received for user: ${user.$id}, Name: ${user.name}`);
+
+    if (!user || !user.$id || !user.name) {
+      throw new Error("Invalid user payload received from trigger.");
+    }
+    
+    // Define the database and collection IDs from your project
+    const databaseId = '686ac6ae001f516e943e';
+    const collectionId = '686acc5e00101633025d';
+
+    console.log(`Attempting to create document for user ${user.$id} in collection ${collectionId}`);
 
     // Create the document in the 'users' collection
     await databases.createDocument(
-      '686ac6ae001f516e943e',       // Your Database ID
-      '686acc5e00101633025d',       // Your 'users' Collection ID
+      databaseId,
+      collectionId,
       user.$id,                      // Use the new user's ID
       {
         'name': user.name,
