@@ -1,0 +1,68 @@
+const sdk = require('node-appwrite');
+
+// This is the main entry point for the function
+module.exports = async (req, res) => {
+  // --- Setup: Initialize the Appwrite SDK ---
+  const client = new sdk.Client()
+    .setEndpoint(req.variables.APPWRITE_FUNCTION_ENDPOINT)
+    .setProject(req.variables.APPWRITE_FUNCTION_PROJECT_ID)
+    .setKey(req.variables.APPWRITE_API_KEY);
+
+  const databases = new sdk.Databases(client);
+
+  try {
+    // --- Step 1: Get the data sent from the Flutter app ---
+    const { planId, amount, currency } = JSON.parse(req.payload);
+    const userId = req.variables.APPWRITE_FUNCTION_USER_ID; // The ID of the user calling the function
+
+    if (!planId || !amount || amount <= 0) {
+      throw new Error("Invalid plan ID or amount.");
+    }
+
+    // --- Step 2: Get the user's document and the specific savings plan document ---
+    const [userDoc, planDoc] = await Promise.all([
+      databases.getDocument('afripay_db', 'users', userId),
+      databases.getDocument('afripay_db', 'savings_plans', planId)
+    ]);
+
+    // --- Step 3: Security Check - Make sure the user owns this savings plan ---
+    if (planDoc.userId !== userId) {
+      throw new Error("Permission denied. You do not own this savings plan.");
+    }
+
+    const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
+
+    // --- Step 4: Check if the user has enough money in their main balance ---
+    if (userDoc[balanceField] < amount) {
+      throw new Error("Insufficient funds in your main wallet.");
+    }
+
+    // --- Step 5: Calculate the new balances ---
+    const newMainBalance = userDoc[balanceField] - amount;
+    const newPlanBalance = planDoc.currentBalance + amount;
+
+    // --- Step 6: Update both the user's wallet and the savings plan securely ---
+    await Promise.all([
+      // Subtract from main wallet
+      databases.updateDocument('afripay_db', 'users', userId, { [balanceField]: newMainBalance }),
+      // Add to savings plan
+      databases.updateDocument('afripay_db', 'savings_plans', planId, { 'currentBalance': newPlanBalance })
+    ]);
+
+    // --- Step 7: Create a transaction record for this internal transfer ---
+    await databases.createDocument('afripay_db', 'transactions', sdk.ID.unique(), {
+      'description': `Funding for Ajo/Susu: ${planDoc.planName}`,
+      'amount': amount,
+      'type': 'debit', // Money is LEAVING the main wallet
+      'status': 'Completed',
+      'userId': userId,
+    }, [sdk.Permission.read(sdk.Role.user(userId))]);
+
+    console.log(`Successfully funded plan ${planId} for user ${userId}`);
+    res.json({ success: true, message: 'Plan funded successfully!' });
+
+  } catch (error) {
+    console.error("Funding failed:", error);
+    res.json({ success: false, message: error.message }, 400);
+  }
+};
