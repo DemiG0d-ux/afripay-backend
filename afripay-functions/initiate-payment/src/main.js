@@ -1,0 +1,53 @@
+import fetch from 'node-fetch';
+
+// This is the main entry point for the modern Appwrite Function.
+// It uses the new 'context' object (req, res, log, error).
+export default async ({ req, res, log, error }) => {
+  try {
+    // 1. Get the data sent from the Flutter app
+    const { amount, email } = JSON.parse(req.payload);
+
+    // 2. Get the secret key from the secure environment variables
+    // The new way to access variables is through process.env
+    const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+
+    if (!paystackSecretKey) {
+      throw new Error("Paystack secret key is not configured in function settings.");
+    }
+
+    // 3. Prepare the data to send to Paystack
+    const options = {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${paystackSecretKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: email,
+        amount: amount * 100,
+        currency: 'GHS', // You can make this dynamic later
+      }),
+    };
+
+    // 4. Make the secure call to Paystack's API
+    const response = await fetch('https://api.paystack.co/transaction/initialize', options);
+    const data = await response.json();
+
+    if (!data.status) {
+      error(`Paystack API Error: ${data.message}`);
+      throw new Error(data.message);
+    }
+
+    log("Successfully initiated payment with Paystack.");
+    
+    // 5. Send the response from Paystack back to the Flutter app
+    return res.json({
+      success: true,
+      data: data.data,
+    });
+
+  } catch (err) {
+    error(`Function failed: ${err.message}`);
+    return res.json({ success: false, message: err.message }, 500);
+  }
+};

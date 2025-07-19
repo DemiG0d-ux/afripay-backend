@@ -1,0 +1,59 @@
+const sdk = require('node-appwrite');
+
+// This is the main entry point for the bill payment function
+module.exports = async (req, res) => {
+  // --- Setup: Initialize the Appwrite SDK ---
+  const client = new sdk.Client()
+    .setEndpoint(req.variables.APPWRITE_FUNCTION_ENDPOINT)
+    .setProject(req.variables.APPWRITE_FUNCTION_PROJECT_ID)
+    .setKey(req.variables.APPWRITE_API_KEY);
+
+  const databases = new sdk.Databases(client);
+
+  try {
+    // --- Step 1: Get the data sent from the Flutter app ---
+    const { biller, amount, customerId, currency } = JSON.parse(req.payload);
+    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
+
+    if (!biller || !amount || amount <= 0 || !customerId) {
+      throw new Error("Invalid biller information provided.");
+    }
+
+    // --- Step 2: Get the user's document to check their balance ---
+    const userDoc = await databases.getDocument('afripay_db', 'users', userId);
+    const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
+
+    // --- Step 3: Check if the user has enough money ---
+    if (userDoc[balanceField] < amount) {
+      throw new Error("Insufficient funds.");
+    }
+
+    // --- Step 4: (SIMULATION) Call the Bill Payment Provider ---
+    // In a real app, you would use 'node-fetch' here to call the Paystack API
+    // or another aggregator to verify the customerId and make the payment.
+    // For this guide, we will assume the payment is always successful if the user has funds.
+    console.log(`Simulating payment of ${amount} ${currency} for ${biller} to customer ${customerId}.`);
+
+    // --- Step 5: Subtract the amount from the user's balance ---
+    const newBalance = userDoc[balanceField] - amount;
+    await databases.updateDocument('afripay_db', 'users', userId, {
+      [balanceField]: newBalance
+    });
+
+    // --- Step 6: Create a transaction record for the bill payment ---
+    await databases.createDocument('afripay_db', 'transactions', sdk.ID.unique(), {
+      'description': `${biller} Payment`,
+      'amount': amount,
+      'type': 'debit',
+      'status': 'Completed',
+      'userId': userId,
+    }, [sdk.Permission.read(sdk.Role.user(userId))]);
+
+    console.log(`Successfully paid bill for user ${userId}`);
+    res.json({ success: true, message: 'Bill paid successfully!' });
+
+  } catch (error) {
+    console.error("Bill payment failed:", error);
+    res.json({ success: false, message: error.message }, 400);
+  }
+};
