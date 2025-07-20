@@ -2,17 +2,19 @@ import fetch from 'node-fetch';
 
 export default async ({ req, res, log, error }) => {
   try {
-    // --- THE FIX: Use req.payload and JSON.parse ---
-    // The data from the Flutter SDK comes in as a string in the 'payload'.
-    const { amount, email } = JSON.parse(req.payload);
+    log("--- Initiate Payment Function Started ---");
 
-    // Add a check to make sure the data was parsed correctly
+    // --- ROBUST PARSING ---
+    // The server will now correctly parse the body because of the header we sent.
+    const { amount, email } = req.body;
+
     if (!amount || !email) {
-      throw new Error("Amount and email are required in the payload.");
+      throw new Error("Amount and email are required in the request body.");
     }
 
-    const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+    log(`Received request to fund ${amount} for ${email}`);
 
+    const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!paystackSecretKey) {
       throw new Error("Paystack secret key is not configured in function settings.");
     }
@@ -30,14 +32,18 @@ export default async ({ req, res, log, error }) => {
     const data = await response.json();
 
     if (!data.status) {
-      throw new Error(data.message);
+      throw new Error(`Paystack API Error: ${data.message}`);
     }
 
     log("Successfully initiated payment with Paystack.");
-    return res.json({ success: true, data: data.data });
+    
+    return res.json({
+      success: true,
+      data: data.data,
+    });
 
   } catch (err) {
-    error(`Function failed: ${err.message}`);
+    error(`Function failed critically: ${err.message}`);
     return res.json({ success: false, message: err.message }, 500);
   }
 };
