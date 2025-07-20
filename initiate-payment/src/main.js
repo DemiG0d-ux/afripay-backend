@@ -4,9 +4,9 @@ export default async ({ req, res, log, error }) => {
   try {
     log("--- Initiate Payment Function Started ---");
 
-    // --- ROBUST PARSING ---
-    // The server will now correctly parse the body because of the header we sent.
-    const { amount, email } = req.body;
+    // --- REVERTING TO req.payload ---
+    // This is the correct way to get data when the Content-Type header is set.
+    const { amount, email } = JSON.parse(req.payload);
 
     if (!amount || !email) {
       throw new Error("Amount and email are required in the request body.");
