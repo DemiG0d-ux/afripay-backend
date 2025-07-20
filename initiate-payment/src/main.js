@@ -2,8 +2,13 @@ import fetch from 'node-fetch';
 
 export default async ({ req, res, log, error }) => {
   try {
-    // --- THE FIX: Use req.payload and JSON.parse ---
-    const { amount, email } = JSON.parse(req.payload);
+    // --- THE FIX: Use req.body, which is automatically parsed by Appwrite ---
+    const { amount, email } = req.body;
+
+    // Add a check to make sure the data is valid
+    if (!amount || !email) {
+      throw new Error("Amount and email are required.");
+    }
 
     const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 
