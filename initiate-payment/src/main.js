@@ -2,12 +2,13 @@ import fetch from 'node-fetch';
 
 export default async ({ req, res, log, error }) => {
   try {
-    // --- THE FIX: Use req.body, which is automatically parsed by Appwrite ---
-    const { amount, email } = req.body;
+    // --- THE FIX: Use req.payload and JSON.parse ---
+    // The data from the Flutter SDK comes in as a string in the 'payload'.
+    const { amount, email } = JSON.parse(req.payload);
 
-    // Add a check to make sure the data is valid
+    // Add a check to make sure the data was parsed correctly
     if (!amount || !email) {
-      throw new Error("Amount and email are required.");
+      throw new Error("Amount and email are required in the payload.");
     }
 
     const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
