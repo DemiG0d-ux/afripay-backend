@@ -9,8 +9,8 @@ export default async ({ req, res, log, error }) => {
 
     const databases = new Databases(client);
     
-    // --- THE FIX: Use req.payload and JSON.parse ---
-    const { type, amount, currency, details } = JSON.parse(req.payload);
+    // --- THE FIX: Use req.body, which is automatically parsed by Appwrite ---
+    const { type, amount, currency, details } = req.body;
     const senderId = req.variables.APPWRITE_FUNCTION_USER_ID;
 
     if (!type || !amount || amount <= 0) {
