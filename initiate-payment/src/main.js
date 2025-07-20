@@ -2,9 +2,8 @@ import fetch from 'node-fetch';
 
 export default async ({ req, res, log, error }) => {
   try {
-    // --- THE FIX: Use req.body instead of req.payload ---
-    // The Appwrite server automatically parses the JSON for us.
-    const { amount, email } = req.body;
+    // --- THE FIX: Use req.payload and JSON.parse ---
+    const { amount, email } = JSON.parse(req.payload);
 
     const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
 
