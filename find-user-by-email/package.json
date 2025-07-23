@@ -1,7 +1,9 @@
 {
+  "name": "find-user-by-email",
+  "version": "1.0.0",
   "main": "src/main.js",
   "type": "module",
   "dependencies": {
-    "node-appwrite": "^13.0.0"
+    "node-appwrite": "^12.0.0"
   }
 }
