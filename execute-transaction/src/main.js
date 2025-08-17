@@ -8,22 +8,21 @@ export default async ({ req, res, log, error }) => {
       .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
-    const users = new Users(client); // We need the Users service now
+    const users = new Users(client);
     
-    const { type, details } = req.body; // Get data from the request
-    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
+    const { type, details } = req.body;
+    
+    // --- THE FIX: Use process.env instead of req.variables ---
+    const userId = process.env.APPWRITE_FUNCTION_USER_ID;
 
     if (!type) {
       throw new Error("Transaction type is required.");
     }
 
-    // --- NEW LOGIC ---
-    // The function now handles different types of actions
     switch (type) {
       case 'p2p-transfer':
       case 'fund-susu':
       case 'pay-bill':
-        // This block handles all monetary transactions
         const { amount, currency } = req.body;
         if (!amount || amount <= 0) throw new Error("Invalid amount.");
 
@@ -34,10 +33,8 @@ export default async ({ req, res, log, error }) => {
         
         const newSenderBalance = senderDoc[balanceField] - amount;
         
-        // Update sender's balance first
         await databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance });
 
-        // Now handle the specific transaction type
         if (type === 'p2p-transfer') {
             // ... p2p transfer logic ...
         } else if (type === 'fund-susu') {
@@ -47,14 +44,12 @@ export default async ({ req, res, log, error }) => {
         }
         break;
 
-      // --- NEW CASE FOR UPDATING USER NAME ---
       case 'update-user-name':
         const { newName } = details;
         if (!newName || newName.trim().length < 2) {
           throw new Error("A valid name is required.");
         }
 
-        // Update the name in both Auth and Database
         await Promise.all([
           users.updateName(userId, newName.trim()),
           databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { 'name': newName.trim() })
