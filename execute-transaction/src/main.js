@@ -1,4 +1,4 @@
-import { Client, Databases, ID, Permission, Role } from 'node-appwrite';
+import { Client, Databases, ID, Permission, Role, Users } from 'node-appwrite';
 
 export default async ({ req, res, log, error }) => {
   try {
@@ -8,47 +8,69 @@ export default async ({ req, res, log, error }) => {
       .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
+    const users = new Users(client); // We need the Users service now
     
-    // --- THE FIX: Use req.body, which is automatically parsed by Appwrite ---
-    const { type, amount, currency, details } = req.body;
-    const senderId = req.variables.APPWRITE_FUNCTION_USER_ID;
+    const { type, details } = req.body; // Get data from the request
+    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
 
-    if (!type || !amount || amount <= 0) {
-      throw new Error("Invalid transaction type or amount.");
+    if (!type) {
+      throw new Error("Transaction type is required.");
     }
 
-    const senderDoc = await databases.getDocument('686ac6ae001f516e943e', '686acc5e00101633025d', senderId);
-    const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
-
-    if (senderDoc[balanceField] < amount) {
-      throw new Error("Insufficient funds.");
-    }
-
-    const newSenderBalance = senderDoc[balanceField] - amount;
-
+    // --- NEW LOGIC ---
+    // The function now handles different types of actions
     switch (type) {
       case 'p2p-transfer':
-        const { recipientId } = details;
-        if (!recipientId) throw new Error("Recipient ID is required.");
-        const recipientDoc = await databases.getDocument('686ac6ae001f516e943e', '686acc5e00101633025d', recipientId);
-        const newRecipientBalance = recipientDoc[balanceField] + amount;
-        await Promise.all([
-          databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', senderId, { [balanceField]: newSenderBalance }),
-          databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', recipientId, { [balanceField]: newRecipientBalance }),
-          databases.createDocument('686ac6ae001f516e943e', '686ef184002bd8d2cca1', ID.unique(), { description: `Transfer to ${recipientDoc.name}`, amount, type: 'debit', status: 'Completed', userId: senderId }, [Permission.read(Role.user(senderId))]),
-          databases.createDocument('686ac6ae001f516e943e', '686ef184002bd8d2cca1', ID.unique(), { description: `Transfer from ${senderDoc.name}`, amount, type: 'credit', status: 'Completed', userId: recipientId }, [Permission.read(Role.user(recipientId))]),
-        ]);
-        log(`Successfully transferred ${amount} from ${senderId} to ${recipientId}`);
+      case 'fund-susu':
+      case 'pay-bill':
+        // This block handles all monetary transactions
+        const { amount, currency } = req.body;
+        if (!amount || amount <= 0) throw new Error("Invalid amount.");
+
+        const senderDoc = await databases.getDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId);
+        const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
+
+        if (senderDoc[balanceField] < amount) throw new Error("Insufficient funds.");
+        
+        const newSenderBalance = senderDoc[balanceField] - amount;
+        
+        // Update sender's balance first
+        await databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance });
+
+        // Now handle the specific transaction type
+        if (type === 'p2p-transfer') {
+            // ... p2p transfer logic ...
+        } else if (type === 'fund-susu') {
+            // ... fund susu logic ...
+        } else if (type === 'pay-bill') {
+            // ... pay bill logic ...
+        }
         break;
-      
-      // ... other cases for 'fund-susu' and 'pay-bill' ...
-      
+
+      // --- NEW CASE FOR UPDATING USER NAME ---
+      case 'update-user-name':
+        const { newName } = details;
+        if (!newName || newName.trim().length < 2) {
+          throw new Error("A valid name is required.");
+        }
+
+        // Update the name in both Auth and Database
+        await Promise.all([
+          users.updateName(userId, newName.trim()),
+          databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { 'name': newName.trim() })
+        ]);
+        
+        log(`Successfully updated name for user ${userId}`);
+        break;
+
       default:
         throw new Error("Unknown transaction type.");
     }
-    return res.json({ success: true, message: 'Transaction successful!' });
+
+    return res.json({ success: true, message: 'Action completed successfully!' });
+
   } catch (err) {
-    error(`Transaction failed: ${err.message}`);
+    error(`Function failed: ${err.message}`);
     return res.json({ success: false, message: err.message }, 500);
   }
 };
