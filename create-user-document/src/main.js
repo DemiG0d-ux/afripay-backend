@@ -3,7 +3,8 @@ import { Client, Databases, Permission, Role } from 'node-appwrite';
 export default async ({ req, res, log, error }) => {
   try {
     const client = new Client()
-      .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT)
+      // --- THE FIX: Use the correct environment variable ---
+      .setEndpoint(process.env.APPWRITE_ENDPOINT)
       .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
 
@@ -11,12 +12,12 @@ export default async ({ req, res, log, error }) => {
     const user = JSON.parse(req.payload);
 
     await databases.createDocument(
-      '686ac6ae001f516e943e', // Database ID
-      '686acc5e00101633025d', // users Collection ID
+      '686ac6ae001f516e943e',
+      '686acc5e00101633025d',
       user.$id,
       {
         'name': user.name,
-        'country': 'ghana', // Default country
+        'country': 'ghana',
         'balanceGHS': 0.0,
         'balanceNGN': 0.0,
       },

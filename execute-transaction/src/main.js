@@ -1,87 +1,60 @@
-import { Client, Databases, Users, Query } from 'node-appwrite';
+import { Client, Databases, ID, Permission, Role, Users } from 'node-appwrite';
 
-const DB_ID = '686ac6ae001f516e943e';
-const PROFILE_COL_ID = '686acc5e00101633025d';
-
-export default async ({ req, res, log, error, variables }) => {
+export default async ({ req, res, log, error }) => {
   try {
-    // 1) Client
-    const endpoint = variables?.APPWRITE_FUNCTION_ENDPOINT ?? process.env.APPWRITE_FUNCTION_ENDPOINT;
-    const project  = variables?.APPWRITE_FUNCTION_PROJECT_ID ?? process.env.APPWRITE_FUNCTION_PROJECT_ID;
-    const apiKey   = variables?.APPWRITE_API_KEY ?? process.env.APPWRITE_API_KEY;
-
-    const client = new Client().setEndpoint(endpoint).setProject(project);
-    if (apiKey) client.setKey(apiKey); // enables Users API + server-side DB writes
+    const client = new Client()
+      // --- THE FIX: Use the correct environment variable ---
+      .setEndpoint(process.env.APPWRITE_ENDPOINT) 
+      .setProject(process.env.APPWRITE_PROJECT_ID)
+      .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
     const users = new Users(client);
+    
+    const { type, details } = req.body;
+    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
 
-    // 2) Input
-    const body = req.bodyJson ?? {};
-    const type = body.type;
-    const details = body.details ?? {};
-
-    // 3) Authenticated user
-    const userId = req.headers['x-appwrite-user-id'];
-    if (!userId) return res.json({ success: false, message: 'Unauthenticated request' }, 401);
-    if (!type)   return res.json({ success: false, message: 'Transaction type is required' }, 400);
-
-    // Helper: get profile docId (userId doc or query fallback)
-    const getProfileDocId = async () => {
-      // try docId==userId first
-      try {
-        await databases.getDocument(DB_ID, PROFILE_COL_ID, userId);
-        return userId;
-      } catch {
-        // fallback: query by userId field
-        const list = await databases.listDocuments(DB_ID, PROFILE_COL_ID, [Query.equal('userId', userId)]);
-        if (list.total === 0) return null;
-        return list.documents[0].$id;
-      }
-    };
+    if (!userId) {
+      throw new Error("Could not identify the user.");
+    }
+    if (!type) {
+      throw new Error("Transaction type is required.");
+    }
 
     switch (type) {
-      case 'update-user-name': {
-        const newName = (details.newName ?? '').trim();
-        if (newName.length < 2) return res.json({ success: false, message: 'A valid name (≥2 chars) is required' }, 400);
-
-        // Update Appwrite auth profile (needs API key with users.write)
-        const userResp = await users.updateName(userId, newName);
-
-        // Update your profile collection
-        const docId = await getProfileDocId();
-        if (docId) {
-          const docResp = await databases.updateDocument(DB_ID, PROFILE_COL_ID, docId, { name: newName });
-          log(`Profile doc updated: ${docResp.$id}`);
-        } else {
-          log('Profile document not found; auth user updated only.');
-        }
-
-        return res.json({ success: true, message: `Name updated to ${newName}` }, 200);
-      }
-
       case 'p2p-transfer':
       case 'fund-susu':
-      case 'pay-bill': {
-        const amount = Number(body.amount);
-        const currency = body.currency;
-        if (!amount || amount <= 0) return res.json({ success: false, message: 'Invalid amount' }, 400);
-        if (!['GHS','NGN'].includes(currency)) return res.json({ success: false, message: 'Invalid currency' }, 400);
-
-        const senderDoc = await databases.getDocument(DB_ID, PROFILE_COL_ID, await getProfileDocId() ?? userId);
+      case 'pay-bill':
+        const { amount, currency } = req.body;
+        if (!amount || amount <= 0) throw new Error("Invalid amount.");
+        const senderDoc = await databases.getDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId);
         const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
-        if ((senderDoc[balanceField] ?? 0) < amount) return res.json({ success: false, message: 'Insufficient funds' }, 400);
+        if (senderDoc[balanceField] < amount) throw new Error("Insufficient funds.");
+        const newSenderBalance = senderDoc[balanceField] - amount;
+        await databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance });
+        // ... rest of the transaction logic ...
+        break;
 
-        await databases.updateDocument(DB_ID, PROFILE_COL_ID, senderDoc.$id, { [balanceField]: senderDoc[balanceField] - amount });
-        log(`${type} of ${amount} ${currency} by ${userId}`);
-        return res.json({ success: true, message: `${type} processed` }, 200);
-      }
+      case 'update-user-name':
+        const { newName } = details;
+        if (!newName || newName.trim().length < 2) {
+          throw new Error("A valid name is required.");
+        }
+        await Promise.all([
+          users.updateName(userId, newName.trim()),
+          databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { 'name': newName.trim() })
+        ]);
+        log(`Successfully updated name for user ${userId}`);
+        break;
 
       default:
-        return res.json({ success: false, message: 'Unknown transaction type' }, 400);
+        throw new Error("Unknown transaction type.");
     }
-  } catch (e) {
-    error(e?.stack || String(e));
-    return res.json({ success: false, message: e?.message || 'Unexpected error' }, 500);
+
+    return res.json({ success: true, message: 'Action completed successfully!' });
+
+  } catch (err) {
+    error(`Function failed: ${err.message}`);
+    return res.json({ success: false, message: err.message }, 500);
   }
 };
