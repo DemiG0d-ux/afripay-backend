@@ -3,20 +3,22 @@ import { Client, Databases, ID, Permission, Role, Users } from 'node-appwrite';
 export default async ({ req, res, log, error }) => {
   try {
     const client = new Client()
-      // --- THE FIX: Use the correct environment variable ---
-      .setEndpoint(process.env.APPWRITE_ENDPOINT) 
-      .setProject(process.env.APPWRITE_PROJECT_ID)
+      .setEndpoint(process.env.APPWRITE_ENDPOINT)
+      .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
     const users = new Users(client);
     
     const { type, details } = req.body;
-    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
+    
+    // --- THE FIX: Use process.env for the user ID ---
+    const userId = process.env.APPWRITE_FUNCTION_USER_ID;
 
     if (!userId) {
-      throw new Error("Could not identify the user.");
+      throw new Error("Could not identify the user. Make sure the function is executed by a logged-in user.");
     }
+
     if (!type) {
       throw new Error("Transaction type is required.");
     }
@@ -27,12 +29,23 @@ export default async ({ req, res, log, error }) => {
       case 'pay-bill':
         const { amount, currency } = req.body;
         if (!amount || amount <= 0) throw new Error("Invalid amount.");
+
         const senderDoc = await databases.getDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId);
         const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
+
         if (senderDoc[balanceField] < amount) throw new Error("Insufficient funds.");
+        
         const newSenderBalance = senderDoc[balanceField] - amount;
+        
         await databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance });
-        // ... rest of the transaction logic ...
+
+        if (type === 'p2p-transfer') {
+            // ... p2p transfer logic ...
+        } else if (type === 'fund-susu') {
+            // ... fund susu logic ...
+        } else if (type === 'pay-bill') {
+            // ... pay bill logic ...
+        }
         break;
 
       case 'update-user-name':
@@ -40,10 +53,12 @@ export default async ({ req, res, log, error }) => {
         if (!newName || newName.trim().length < 2) {
           throw new Error("A valid name is required.");
         }
+
         await Promise.all([
           users.updateName(userId, newName.trim()),
           databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { 'name': newName.trim() })
         ]);
+        
         log(`Successfully updated name for user ${userId}`);
         break;
 
