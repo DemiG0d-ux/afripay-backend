@@ -11,11 +11,14 @@ export default async ({ req, res, log, error }) => {
     const users = new Users(client);
     
     const { type, details } = req.body;
-    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
+    
+    // --- THE FIX: Get the user ID from the request headers ---
+    const userId = req.headers['x-appwrite-user-id'];
 
     if (!userId) {
-      throw new Error("Could not identify the user.");
+      throw new Error("Could not identify the user. Make sure the function is executed by a logged-in user.");
     }
+
     if (!type) {
       throw new Error("Transaction type is required.");
     }
