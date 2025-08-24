@@ -11,8 +11,6 @@ export default async ({ req, res, log, error }) => {
     const users = new Users(client);
     
     const { type, details } = req.body;
-    
-    // --- THE FIX: Get the user ID from the request headers ---
     const userId = req.headers['x-appwrite-user-id'];
 
     if (!userId) {
