@@ -3,7 +3,6 @@ import { Client, Databases, ID, Permission, Role, Users } from 'node-appwrite';
 export default async ({ req, res, log, error }) => {
   try {
     const client = new Client()
-      // --- THE FIX: Use the new custom environment variable ---
       .setEndpoint(process.env.APPWRITE_CUSTOM_ENDPOINT)
       .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
@@ -45,10 +44,14 @@ export default async ({ req, res, log, error }) => {
         if (!newName || newName.trim().length < 2) {
           throw new Error("A valid name is required.");
         }
-        await Promise.all([
-          users.updateName(userId, newName.trim()),
-          databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { 'name': newName.trim() })
-        ]);
+        // --- THE SIMPLIFIED LOGIC ---
+        // We now only update the name in the database document, which is simpler and more reliable.
+        await databases.updateDocument(
+          '686ac6ae001f516e943e', 
+          '686acc5e00101633025d', 
+          userId, 
+          { 'name': newName.trim() }
+        );
         log(`Successfully updated name for user ${userId}`);
         break;
 
