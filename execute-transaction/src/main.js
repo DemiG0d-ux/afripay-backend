@@ -12,8 +12,8 @@ export default async ({ req, res, log, error }) => {
     
     const { type, details } = req.body;
     
-    // --- THE FIX: Use process.env for the user ID ---
-    const userId = process.env.APPWRITE_FUNCTION_USER_ID;
+    // --- THE FIX: Use req.variables for the user ID ---
+    const userId = req.variables.APPWRITE_FUNCTION_USER_ID;
 
     if (!userId) {
       throw new Error("Could not identify the user. Make sure the function is executed by a logged-in user.");
