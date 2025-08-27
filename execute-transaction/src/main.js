@@ -8,7 +8,6 @@ export default async ({ req, res, log, error }) => {
       .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
-    const users = new Users(client);
     
     const { type, details } = req.body;
     const userId = req.headers['x-appwrite-user-id'];
@@ -21,6 +20,7 @@ export default async ({ req, res, log, error }) => {
       throw new Error("Transaction type is required.");
     }
 
+    // This switch block now only handles monetary transactions
     switch (type) {
       case 'p2p-transfer':
       case 'fund-susu':
@@ -40,24 +40,8 @@ export default async ({ req, res, log, error }) => {
         // ... rest of the transaction logic for transfers, funding, etc. ...
         break;
 
-      case 'update-user-name':
-        const { newName } = details;
-        if (!newName || newName.trim().length < 2) {
-          throw new Error("A valid name is required.");
-        }
-        // --- THE SIMPLIFIED LOGIC ---
-        // We now only update the name in the database document, which is simpler and more reliable.
-        await databases.updateDocument(
-          '686ac6ae001f516e943e', 
-          '686acc5e00101633025d', 
-          userId, 
-          { 'name': newName.trim() }
-        );
-        log(`Successfully updated name for user ${userId}`);
-        break;
-
       default:
-        throw new Error("Unknown transaction type.");
+        throw new Error("Unknown or unsupported transaction type.");
     }
 
     return res.json({ success: true, message: 'Action completed successfully!' });
