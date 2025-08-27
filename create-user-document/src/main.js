@@ -3,14 +3,13 @@ import { Client, Databases, Permission, Role } from 'node-appwrite';
 export default async ({ req, res, log, error }) => {
   try {
     const client = new Client()
-      // Use the new custom environment variable for the endpoint
       .setEndpoint(process.env.APPWRITE_CUSTOM_ENDPOINT) 
       .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
     
-    // The user data from an event trigger comes in the 'payload'
+    // --- THE FIX: Use req.payload for event-triggered functions ---
     const user = JSON.parse(req.payload);
 
     await databases.createDocument(
