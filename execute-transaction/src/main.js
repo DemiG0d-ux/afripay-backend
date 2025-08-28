@@ -37,9 +37,45 @@ export default async ({ req, res, log, error }) => {
         
         const newSenderBalance = senderDoc[balanceField] - amount;
         
-        await databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance });
+        // --- THIS SECTION IS NOW COMPLETE ---
+        if (type === 'p2p-transfer') {
+            const { recipientId } = details;
+            if (!recipientId) throw new Error("Recipient ID is required.");
+            const recipientDoc = await databases.getDocument('686ac6ae001f516e943e', '686acc5e00101633025d', recipientId);
+            const newRecipientBalance = recipientDoc[balanceField] + amount;
 
-        // ... rest of the transaction logic for transfers, funding, etc. ...
+            await Promise.all([
+              databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance }),
+              databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', recipientId, { [balanceField]: newRecipientBalance }),
+              databases.createDocument('686ac6ae001f516e943e', '686ef184002bd8d2cca1', ID.unique(), { description: `Transfer to ${recipientDoc.name}`, amount, type: 'debit', status: 'Completed', userId }, [Permission.read(Role.user(userId))]),
+              databases.createDocument('686ac6ae001f516e943e', '686ef184002bd8d2cca1', ID.unique(), { description: `Transfer from ${senderDoc.name}`, amount, type: 'credit', status: 'Completed', userId: recipientId }, [Permission.read(Role.user(recipientId))]),
+            ]);
+            log(`Successfully transferred ${amount} from ${userId} to ${recipientId}`);
+
+        } else if (type === 'fund-susu') {
+            const { planId } = details;
+            if (!planId) throw new Error("Plan ID is required for funding.");
+            const planDoc = await databases.getDocument('686ac6ae001f516e943e', '686c2938003206276012', planId);
+            const newPlanBalance = planDoc.currentBalance + amount;
+
+            await Promise.all([
+              databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance }),
+              databases.updateDocument('686ac6ae001f516e943e', '686c2938003206276012', planId, { 'currentBalance': newPlanBalance }),
+              databases.createDocument('686ac6ae001f516e943e', '686ef184002bd8d2cca1', ID.unique(), { description: `Funding for Ajo/Susu: ${planDoc.planName}`, amount, type: 'debit', status: 'Completed', userId }, [Permission.read(Role.user(userId))]),
+            ]);
+            log(`Successfully funded plan ${planId} for user ${userId}`);
+
+        } else if (type === 'pay-bill') {
+            const { biller, customerId } = details;
+            if (!biller || !customerId) throw new Error("Biller details are required.");
+            log(`Simulating payment of ${amount} for ${biller} to customer ${customerId}.`);
+
+            await Promise.all([
+              databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance }),
+              databases.createDocument('686ac6ae001f516e943e', '686ef184002bd8d2cca1', ID.unique(), { description: `${biller} Payment`, amount, type: 'debit', status: 'Completed', userId }, [Permission.read(Role.user(userId))]),
+            ]);
+            log(`Successfully paid bill for user ${userId}`);
+        }
         break;
 
       default:
