@@ -4,41 +4,25 @@ import fetch from 'node-fetch';
 export default async ({ req, res, log, error }) => {
   try {
     const client = new Client()
-      // --- THE FIX: Use the new custom environment variable ---
       .setEndpoint(process.env.APPWRITE_CUSTOM_ENDPOINT)
       .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
       .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new Databases(client);
-    const users = new Users(client);
     
     const { type, details } = req.body;
     const userId = req.headers['x-appwrite-user-id'];
 
-    if (!userId) throw new Error("Could not identify user.");
-    if (!type) throw new Error("Transaction type is required.");
+    if (!userId) {
+      throw new Error("Could not identify the user. Make sure the function is executed by a logged-in user.");
+    }
 
+    if (!type) {
+      throw new Error("Transaction type is required.");
+    }
+
+    // This switch block now only handles monetary transactions
     switch (type) {
-      case 'update-user-name':
-        const { newName } = details;
-        if (!newName || newName.trim().length < 2) throw new Error("A valid name is required.");
-        
-        await Promise.all([
-          users.updateName(userId, newName.trim()),
-          databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { 'name': newName.trim() })
-        ]);
-        log(`Successfully updated name for user ${userId}`);
-        break;
-
-      case 'update-user-password':
-        const { oldPassword, newPassword } = details;
-        if (!oldPassword || !newPassword || newPassword.trim().length < 8) {
-            throw new Error("Valid current and new passwords are required.");
-        }
-        await users.updatePassword(userId, newPassword.trim(), oldPassword);
-        log(`Successfully updated password for user ${userId}`);
-        break;
-
       case 'p2p-transfer':
       case 'fund-susu':
       case 'pay-bill':
@@ -53,11 +37,13 @@ export default async ({ req, res, log, error }) => {
         
         const newSenderBalance = senderDoc[balanceField] - amount;
         
-        // ... rest of the monetary transaction logic ...
+        await databases.updateDocument('686ac6ae001f516e943e', '686acc5e00101633025d', userId, { [balanceField]: newSenderBalance });
+
+        // ... rest of the transaction logic for transfers, funding, etc. ...
         break;
 
       default:
-        throw new Error("Unknown transaction type.");
+        throw new Error("Unknown or unsupported transaction type.");
     }
 
     return res.json({ success: true, message: 'Action completed successfully!' });
