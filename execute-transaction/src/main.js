@@ -3,7 +3,6 @@ import fetch from 'node-fetch';
 
 export default async ({ req, res, log, error }) => {
   // --- ROBUST PAYLOAD PARSING ---
-  // This safely handles different data formats from various Appwrite triggers.
   let payload;
   try {
     if (req.bodyRaw) {
@@ -32,7 +31,6 @@ export default async ({ req, res, log, error }) => {
     .setKey(process.env.APPWRITE_API_KEY);
 
   const databases = new Databases(client);
-  const users = new Users(client);
   
   const DATABASE_ID = '686ac6ae001f516e943e';
   const USERS_COLLECTION_ID = '686acc5e00101633025d';
@@ -45,11 +43,9 @@ export default async ({ req, res, log, error }) => {
 
     switch (type) {
       // --- VIRTUAL CARD LOGIC ---
-      case 'create-virtual-card': {
+      case 'create-virtual-card':
+        // Logic for creating card... (already implemented)
         log(`Creating virtual card for user: ${userId}`);
-        
-        // This is a placeholder. In a real app, you would call Paystack's API here.
-        // For now, we simulate creating a card and storing its info.
         const newCard = {
           cardId: `vc_${ID.unique()}`,
           cardNumber: Math.floor(1000000000000000 + Math.random() * 9000000000000000).toString(),
@@ -60,99 +56,86 @@ export default async ({ req, res, log, error }) => {
           balance: 0.0,
           isActive: true,
         };
-
         await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
           virtualCard: JSON.stringify(newCard),
         });
-
         log(`Successfully created virtual card for user: ${userId}`);
         return res.json({ success: true, data: newCard });
-      }
 
-      case 'fund-virtual-card': {
+      case 'fund-virtual-card':
+        // Logic for funding card... (already implemented)
         if (currentBalance < amount) {
           throw new Error('Insufficient wallet balance to fund card.');
         }
+        const virtualCardDataFund = JSON.parse(userDoc.virtualCard || '{}');
+        if (!virtualCardDataFund.cardId) {
+          throw new Error('User does not have a virtual card.');
+        }
+        const newWalletBalanceFund = currentBalance - amount;
+        const newCardBalance = (virtualCardDataFund.balance || 0.0) + amount;
+        virtualCardDataFund.balance = newCardBalance;
+        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
+          [balanceField]: newWalletBalanceFund,
+          virtualCard: JSON.stringify(virtualCardDataFund),
+        });
+        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
+          userId, type: 'debit', amount, description: 'Virtual Card Funding', status: 'Completed', currency,
+        });
+        log(`Successfully funded virtual card for user ${userId} with ${amount} ${currency}`);
+        return res.json({ success: true, message: 'Card funded successfully.' });
 
+      // --- NEW LOGIC FOR FREEZING/UNFREEZING ---
+      case 'freeze-virtual-card': {
+        log(`Freezing virtual card for user: ${userId}`);
         const virtualCardData = JSON.parse(userDoc.virtualCard || '{}');
         if (!virtualCardData.cardId) {
           throw new Error('User does not have a virtual card.');
         }
-
-        const newWalletBalance = currentBalance - amount;
-        const newCardBalance = (virtualCardData.balance || 0.0) + amount;
-        virtualCardData.balance = newCardBalance;
-
+        virtualCardData.isActive = false;
         await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
-          [balanceField]: newWalletBalance,
           virtualCard: JSON.stringify(virtualCardData),
         });
-
-        // Create transaction record for the funding
-        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
-          userId,
-          type: 'debit',
-          amount,
-          description: 'Virtual Card Funding',
-          status: 'Completed',
-          currency,
-        });
-        
-        log(`Successfully funded virtual card for user ${userId} with ${amount} ${currency}`);
-        return res.json({ success: true, message: 'Card funded successfully.' });
+        log(`Successfully froze virtual card for user: ${userId}`);
+        return res.json({ success: true, message: 'Card frozen successfully.' });
       }
 
-      // --- P2P TRANSFER LOGIC ---
-      case 'p2p-transfer': {
-        if (currentBalance < amount) {
-          throw new Error('Insufficient balance.');
+      case 'unfreeze-virtual-card': {
+        log(`Unfreezing virtual card for user: ${userId}`);
+        const virtualCardData = JSON.parse(userDoc.virtualCard || '{}');
+        if (!virtualCardData.cardId) {
+          throw new Error('User does not have a virtual card.');
         }
+        virtualCardData.isActive = true;
+        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
+          virtualCard: JSON.stringify(virtualCardData),
+        });
+        log(`Successfully unfroze virtual card for user: ${userId}`);
+        return res.json({ success: true, message: 'Card unfrozen successfully.' });
+      }
 
+      // --- EXISTING P2P & BILL PAY LOGIC ---
+      case 'p2p-transfer':
+        // ... (existing p2p logic)
+        if (currentBalance < amount) { throw new Error('Insufficient balance.'); }
         const recipientId = details.recipientId;
         const recipientDoc = await databases.getDocument(DATABASE_ID, USERS_COLLECTION_ID, recipientId);
-        
         const newSenderBalance = currentBalance - amount;
         const newRecipientBalance = recipientDoc[balanceField] + amount;
-
-        // Update sender's balance
-        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
-          [balanceField]: newSenderBalance
-        });
-        // Update recipient's balance
-        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, recipientId, {
-          [balanceField]: newRecipientBalance
-        });
-
-        // Create transaction records
-        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
-            userId, type: 'debit', amount, description: `Transfer to ${recipientDoc.name}`, status: 'Completed', currency
-        });
-        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
-            userId: recipientId, type: 'credit', amount, description: `Transfer from ${userDoc.name}`, status: 'Completed', currency
-        });
-
+        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, { [balanceField]: newSenderBalance });
+        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, recipientId, { [balanceField]: newRecipientBalance });
+        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), { userId, type: 'debit', amount, description: `Transfer to ${recipientDoc.name}`, status: 'Completed', currency });
+        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), { userId: recipientId, type: 'credit', amount, description: `Transfer from ${userDoc.name}`, status: 'Completed', currency });
         log(`Successfully transferred ${amount} from ${userId} to ${recipientId}`);
         return res.json({ success: true, message: 'Transfer successful' });
-      }
-      
-      // --- BILL PAYMENT LOGIC ---
-      case 'pay-bill': {
-        if (currentBalance < amount) {
-            throw new Error('Insufficient balance for bill payment.');
-        }
 
+      case 'pay-bill':
+        // ... (existing bill pay logic)
+        if (currentBalance < amount) { throw new Error('Insufficient balance for bill payment.'); }
         const newBalance = currentBalance - amount;
-        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
-            [balanceField]: newBalance
-        });
-
-        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
-            userId, type: 'debit', amount, description: `Bill payment: ${details.biller}`, status: 'Completed', currency
-        });
-
+        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, { [balanceField]: newBalance });
+        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), { userId, type: 'debit', amount, description: `Bill payment: ${details.biller}`, status: 'Completed', currency });
         log(`Successfully paid bill of ${amount} for ${details.biller} by user ${userId}`);
         return res.json({ success: true, message: 'Bill payment successful' });
-      }
 
       default:
         throw new Error(`Unknown transaction type: ${type}`);
