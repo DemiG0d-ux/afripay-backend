@@ -1,4 +1,4 @@
-import { Client, Databases, ID } from 'node-appwrite';
+import { Client, Databases, Users, ID } from 'node-appwrite';
 import fetch from 'node-fetch';
 
 export default async ({ req, res, log, error }) => {
@@ -59,6 +59,7 @@ export default async ({ req, res, log, error }) => {
     .setKey(APPWRITE_API_KEY);
 
   const databases = new Databases(client);
+  const users = new Users(client); // --- Initialize the Users service ---
   const paystackBaseUrl = 'https://api.paystack.co';
 
   try {
@@ -72,6 +73,10 @@ export default async ({ req, res, log, error }) => {
       case 'create-virtual-card': {
         log(`Attempting to create LIVE virtual card for user: ${userId}`);
         
+        // --- THE FIX: Get the user's email from the Auth service ---
+        const userAuthRecord = await users.get(userId);
+        const userEmail = userAuthRecord.email;
+        
         // Step 1: Create a Paystack Customer for the user
         const customerResponse = await fetch(`${paystackBaseUrl}/customer`, {
             method: 'POST',
@@ -80,7 +85,7 @@ export default async ({ req, res, log, error }) => {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({ 
-                email: userDoc.email, 
+                email: userEmail, // Use the correct email
                 first_name: userDoc.name.split(' ')[0], 
                 last_name: userDoc.name.split(' ')[1] || userDoc.name.split(' ')[0] 
             }),
