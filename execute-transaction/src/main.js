@@ -44,12 +44,12 @@ export default async ({ req, res, log, error }) => {
     !SAVINGS_COLLECTION_ID ||
     !TRANSACTIONS_COLLECTION_ID
   ) {
-    error('Missing one or more required environment variables.');
+    error('CRITICAL: Missing one or more required environment variables.');
     return res.json({ success: false, error: 'Server misconfiguration.' }, 500);
   }
   
   if (!userId) {
-    error('Could not identify the user. Function was not executed by a logged-in user.');
+    error('CRITICAL: User ID not found in headers. Function was not executed by a logged-in user.');
     return res.json({ success: false, error: 'Authentication failed. Please log in.' }, 401);
   }
 
@@ -59,8 +59,18 @@ export default async ({ req, res, log, error }) => {
     .setKey(APPWRITE_API_KEY);
 
   const databases = new Databases(client);
-  const users = new Users(client); // --- Initialize the Users service ---
+  const users = new Users(client);
   const paystackBaseUrl = 'https://api.paystack.co';
+  
+  // Helper for safer Paystack API calls
+  const safePaystackRequest = async (url, options) => {
+    const response = await fetch(url, options);
+    const responseText = await response.text();
+    if (!responseText) {
+      throw new Error(`Paystack API returned an empty response from endpoint: ${url}`);
+    }
+    return JSON.parse(responseText);
+  };
 
   try {
     const userDoc = await databases.getDocument(DATABASE_ID, USERS_COLLECTION_ID, userId);
@@ -73,46 +83,28 @@ export default async ({ req, res, log, error }) => {
       case 'create-virtual-card': {
         log(`Attempting to create LIVE virtual card for user: ${userId}`);
         
-        // --- THE FIX: Get the user's email from the Auth service ---
         const userAuthRecord = await users.get(userId);
         const userEmail = userAuthRecord.email;
         
-        // Step 1: Create a Paystack Customer for the user
-        const customerResponse = await fetch(`${paystackBaseUrl}/customer`, {
+        const customerData = await safePaystackRequest(`${paystackBaseUrl}/customer`, {
             method: 'POST',
-            headers: {
-                Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                'Content-Type': 'application/json',
-            },
+            headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-                email: userEmail, // Use the correct email
+                email: userEmail,
                 first_name: userDoc.name.split(' ')[0], 
                 last_name: userDoc.name.split(' ')[1] || userDoc.name.split(' ')[0] 
             }),
         });
-        const customerData = await customerResponse.json();
-        if (!customerData.status) {
-            throw new Error(`Paystack customer creation failed: ${customerData.message}`);
-        }
+        if (!customerData.status) throw new Error(`Paystack customer creation failed: ${customerData.message}`);
+        
         const customerCode = customerData.data.customer_code;
         
-        // Step 2: Create the Virtual Card linked to the customer
-        const cardResponse = await fetch(`${paystackBaseUrl}/virtual_card`, {
+        const cardData = await safePaystackRequest(`${paystackBaseUrl}/virtualcard`, { // Corrected endpoint
             method: 'POST',
-            headers: {
-                Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                customer: customerCode,
-                currency: currency,
-            }),
+            headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customer: customerCode, currency: currency }),
         });
-        
-        const cardData = await cardResponse.json();
-        if (!cardData.status) {
-            throw new Error(`Paystack card creation failed: ${cardData.message}`);
-        }
+        if (!cardData.status) throw new Error(`Paystack card creation failed: ${cardData.message}`);
         
         const liveCard = cardData.data;
         const newCard = {
@@ -135,66 +127,62 @@ export default async ({ req, res, log, error }) => {
       }
       
       case 'fund-virtual-card': {
-        if (userBalance < amount) {
-          throw new Error('Insufficient wallet balance.');
-        }
+        if (userBalance < amount) throw new Error('Insufficient wallet balance.');
 
         const card = JSON.parse(userDoc.virtualCard);
-
-        // Step 1: LIVE API call to Paystack to fund the card
-        const fundResponse = await fetch(`${paystackBaseUrl}/virtual_card/${card.id}/fund`, {
-          method: 'POST',
-          headers: {
-              Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-              'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-              amount: amount * 100, // Paystack expects amount in kobo/pesewas
-              from: "balance" // Fund from your Paystack balance
-          }),
-        });
-
-        const fundData = await fundResponse.json();
-        if (!fundData.status) {
-            throw new Error(`Paystack card funding failed: ${fundData.message}`);
-        }
-
-        // Step 2: Update internal balances
-        const newCardBalance = card.balance + amount;
-        const newUserBalance = userBalance - amount;
-        card.balance = newCardBalance;
         
-        await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
-            [balanceField]: newUserBalance,
-            virtualCard: JSON.stringify(card),
-        });
+        let paystackSuccess = false;
+        try {
+            const fundData = await safePaystackRequest(`${paystackBaseUrl}/virtualcard/${card.id}/fund`, { // Corrected endpoint
+              method: 'POST',
+              headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ amount: amount * 100, from: "balance" }),
+            });
+            if (!fundData.status) throw new Error(`Paystack card funding failed: ${fundData.message}`);
+            paystackSuccess = true;
+        } catch(e) {
+            error(`CRITICAL: Paystack API call failed during card funding for user ${userId}. Error: ${e.message}`);
+            throw e; // Re-throw to send failure to client
+        }
+        
+        if(paystackSuccess) {
+            try {
+                const newCardBalance = card.balance + amount;
+                const newUserBalance = userBalance - amount;
+                card.balance = newCardBalance;
+                
+                await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
+                    [balanceField]: newUserBalance,
+                    virtualCard: JSON.stringify(card),
+                });
 
-        await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
-            userId: userId, type: 'debit', amount: amount, description: 'Virtual Card Funding', status: 'Completed',
-        });
-
-        log(`Successfully funded LIVE virtual card for user ${userId}`);
-        return res.json({ success: true, message: 'Card funded successfully' });
+                await databases.createDocument(DATABASE_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), {
+                    userId: userId, type: 'debit', amount: amount, description: 'Virtual Card Funding', status: 'Completed',
+                });
+                
+                log(`Successfully funded LIVE virtual card and updated internal DB for user ${userId}`);
+                return res.json({ success: true, message: 'Card funded successfully' });
+            } catch(dbError) {
+                // This is the critical error case
+                error(`CRITICAL ALERT: Paystack funding succeeded for user ${userId}, but Appwrite DB update FAILED. Manual reconciliation required. Error: ${dbError.message}`);
+                // Return success to the user, as their money WAS moved. The issue is internal.
+                return res.json({ success: true, message: 'Card funding is processing.' });
+            }
+        }
       }
+      break; // Added break statement
 
       case 'freeze-virtual-card':
       case 'unfreeze-virtual-card': {
           const card = JSON.parse(userDoc.virtualCard);
           const endpoint = type === 'freeze-virtual-card' ? 'freeze' : 'unfreeze';
 
-          // LIVE API call to Paystack to change card status
-          const statusResponse = await fetch(`${paystackBaseUrl}/virtual_card/${card.id}/${endpoint}`, {
+          const statusData = await safePaystackRequest(`${paystackBaseUrl}/virtualcard/${card.id}/${endpoint}`, { // Corrected endpoint
             method: 'POST',
-            headers: {
-                Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`
-            },
+            headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
           });
-          const statusData = await statusResponse.json();
-          if(!statusData.status){
-             throw new Error(`Paystack card ${endpoint} failed: ${statusData.message}`);
-          }
+          if(!statusData.status) throw new Error(`Paystack card ${endpoint} failed: ${statusData.message}`);
 
-          // Update internal status
           card.isActive = type === 'unfreeze-virtual-card'; 
           await databases.updateDocument(DATABASE_ID, USERS_COLLECTION_ID, userId, {
               virtualCard: JSON.stringify(card),
@@ -203,8 +191,9 @@ export default async ({ req, res, log, error }) => {
           log(`LIVE Card ${type} successful for user:`, userId);
           return res.json({ success: true, message: `Card ${endpoint} successful.` });
       }
-
+      
       // --- EXISTING TRANSACTION CASES ---
+      // (No changes needed for these as they are internal atomic operations)
       case 'p2p-transfer': {
         const { recipientId } = details;
         if (userBalance < amount) throw new Error('Insufficient balance.');
