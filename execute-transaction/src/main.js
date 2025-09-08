@@ -99,7 +99,8 @@ export default async ({ req, res, log, error }) => {
         
         const customerCode = customerData.data.customer_code;
         
-        const cardData = await safePaystackRequest(`${paystackBaseUrl}/virtualcard`, { // Corrected endpoint
+        // --- FIX: Corrected endpoint from /virtualcard to /virtual-cards ---
+        const cardData = await safePaystackRequest(`${paystackBaseUrl}/virtual-cards`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ customer: customerCode, currency: currency }),
@@ -133,7 +134,8 @@ export default async ({ req, res, log, error }) => {
         
         let paystackSuccess = false;
         try {
-            const fundData = await safePaystackRequest(`${paystackBaseUrl}/virtualcard/${card.id}/fund`, { // Corrected endpoint
+            // --- FIX: Corrected endpoint from /virtualcard to /virtual-cards ---
+            const fundData = await safePaystackRequest(`${paystackBaseUrl}/virtual-cards/${card.id}/fund`, {
               method: 'POST',
               headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ amount: amount * 100, from: "balance" }),
@@ -170,14 +172,15 @@ export default async ({ req, res, log, error }) => {
             }
         }
       }
-      break; // Added break statement
+      break; 
 
       case 'freeze-virtual-card':
       case 'unfreeze-virtual-card': {
           const card = JSON.parse(userDoc.virtualCard);
           const endpoint = type === 'freeze-virtual-card' ? 'freeze' : 'unfreeze';
 
-          const statusData = await safePaystackRequest(`${paystackBaseUrl}/virtualcard/${card.id}/${endpoint}`, { // Corrected endpoint
+          // --- FIX: Corrected endpoint from /virtualcard to /virtual-cards ---
+          const statusData = await safePaystackRequest(`${paystackBaseUrl}/virtual-cards/${card.id}/${endpoint}`, { 
             method: 'POST',
             headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
           });
@@ -193,7 +196,6 @@ export default async ({ req, res, log, error }) => {
       }
       
       // --- EXISTING TRANSACTION CASES ---
-      // (No changes needed for these as they are internal atomic operations)
       case 'p2p-transfer': {
         const { recipientId } = details;
         if (userBalance < amount) throw new Error('Insufficient balance.');
