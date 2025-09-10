@@ -1,43 +1,49 @@
-        import { Client, Users, Query } from 'node-appwrite';
+import { Client, Users } from "node-appwrite";
 
-        export default async ({ req, res, log, error }) => {
-          try {
-            const { name } = JSON.parse(req.payload);
-            if (!name) {
-              throw new Error("Name is required in the payload.");
-            }
+export default async ({ req, res, log, error, variables }) => {
+  try {
+    const { email, name } = JSON.parse(req.payload || "{}");
 
-            const client = new Client()
-              .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT)
-              .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-              .setKey(process.env.APPWRITE_API_KEY);
+    if (!email && !name) {
+      throw new Error("Either email or name must be provided in the payload.");
+    }
 
-            const users = new Users(client);
+    // Init Appwrite
+    const client = new Client()
+      .setEndpoint(variables.APPWRITE_ENDPOINT) // e.g. https://cloud.appwrite.io/v1
+      .setProject(variables.APPWRITE_FUNCTION_PROJECT_ID)
+      .setKey(variables.APPWRITE_API_KEY);
 
-            // Use the server-side SDK to search for a user by name
-            const userList = await users.list([
-              Query.search('name', name) // Using a search query for flexibility
-            ]);
+    const users = new Users(client);
+    const userList = await users.list(); // Appwrite does not support queries here
 
-            if (userList.total === 0) {
-              return res.json({ success: false, message: 'User not found.' });
-            }
+    let foundUsers = [];
 
-            // Return a list of potential matches (public info only)
-            const foundUsers = userList.users.map(user => ({
-              id: user.$id,
-              name: user.name,
-              email: user.email // Also return email for confirmation in the app
-            }));
+    if (email) {
+      foundUsers = userList.users.filter(
+        (user) => user.email?.toLowerCase() === email.toLowerCase()
+      );
+    } else if (name) {
+      foundUsers = userList.users.filter((user) =>
+        user.name?.toLowerCase().includes(name.toLowerCase())
+      );
+    }
 
-            return res.json({
-              success: true,
-              data: foundUsers,
-            });
+    if (foundUsers.length === 0) {
+      return res.json({ success: false, message: "User not found." }, 404);
+    }
 
-          } catch (err) {
-            error(`Function failed: ${err.message}`);
-            return res.json({ success: false, message: err.message }, 500);
-          }
-        };
-        
+    // Return sanitized list (safe fields only)
+    return res.json({
+      success: true,
+      data: foundUsers.map((user) => ({
+        id: user.$id,
+        name: user.name,
+        email: user.email,
+      })),
+    });
+  } catch (err) {
+    error(`❌ find-user failed: ${err.message}`);
+    return res.json({ success: false, message: err.message }, 500);
+  }
+};

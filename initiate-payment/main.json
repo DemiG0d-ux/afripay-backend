@@ -1,0 +1,7 @@
+{
+  "name": "Initiate Payment",
+  "runtime": "node-18.0",
+  "execute": ["*"],
+  "events": [],
+  "timeout": 15
+}

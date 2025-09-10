@@ -1,40 +1,48 @@
 import { Client, Databases, ID, Permission, Role, Query } from 'node-appwrite';
 import crypto from 'crypto';
 
-// This is the main entry point for your webhook function
 export default async ({ req, res, log, error }) => {
   try {
-    // --- Step 1: Verify the request is actually from Paystack ---
+    log("--- Confirm Payment Webhook Triggered ---");
+
+    // --- Step 1: Verify webhook signature from Paystack ---
     const secret = process.env.PAYSTACK_WEBHOOK_SECRET;
-    const hash = crypto.createHmac('sha512', secret)
-                       .update(JSON.stringify(req.body))
-                       .digest('hex');
-    
-    if (hash !== req.headers['x-paystack-signature']) {
+    if (!secret) {
+      error("PAYSTACK_WEBHOOK_SECRET is not configured.");
+      return res.send("Server misconfigured", 500);
+    }
+
+    const computedHash = crypto
+      .createHmac("sha512", secret)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (computedHash !== req.headers["x-paystack-signature"]) {
       error("Invalid webhook signature.");
-      return res.send('Invalid signature', 401);
+      return res.send("Invalid signature", 401);
     }
 
     const event = req.body;
 
-    // --- Step 2: Check if the payment was successful ---
-    if (event.event === 'charge.success') {
+    // --- Step 2: Process only successful charges ---
+    if (event.event === "charge.success") {
       const { amount, customer, currency } = event.data;
       const userEmail = customer.email;
       const amountPaid = amount / 100;
 
-      // --- Setup Appwrite SDK ---
+      // --- Step 3: Setup Appwrite Client ---
       const client = new Client()
         .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT)
         .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
         .setKey(process.env.APPWRITE_API_KEY);
+
       const databases = new Databases(client);
 
-      // --- Step 3: Find the user in our database by their email ---
+      // --- Step 4: Find user by email ---
       const userResponse = await databases.listDocuments(
-        '686ac6ae001f516e943e', // Your Database ID
-        '686acc5e00101633025d', // Your 'users' Collection ID
-        [Query.equal('email', userEmail)]
+        process.env.DATABASE_ID, // safer than hardcoding IDs
+        process.env.USERS_COLLECTION_ID,
+        [Query.equal("email", userEmail)]
       );
 
       if (userResponse.total === 0) {
@@ -43,40 +51,37 @@ export default async ({ req, res, log, error }) => {
 
       const user = userResponse.documents[0];
       const userId = user.$id;
-      const balanceField = currency === 'GHS' ? 'balanceGHS' : 'balanceNGN';
+      const balanceField = currency === "GHS" ? "balanceGHS" : "balanceNGN";
 
-      // --- Step 4: Calculate and update the new balance ---
-      const newBalance = user[balanceField] + amountPaid;
+      // --- Step 5: Update user balance ---
+      const newBalance = (user[balanceField] || 0) + amountPaid;
       await databases.updateDocument(
-        '686ac6ae001f516e943e',
-        '686acc5e00101633025d',
+        process.env.DATABASE_ID,
+        process.env.USERS_COLLECTION_ID,
         userId,
         { [balanceField]: newBalance }
       );
-      
-      // --- Step 5: Create the transaction receipt ---
+
+      // --- Step 6: Log the transaction ---
       await databases.createDocument(
-        '686ac6ae001f516e943e',
-        '686ef184002bd8d2cca1', // Your 'transactions' Collection ID
+        process.env.DATABASE_ID,
+        process.env.TRANSACTIONS_COLLECTION_ID,
         ID.unique(),
         {
-          'description': `Wallet Funding via Paystack`,
-          'amount': amountPaid,
-          'type': 'credit',
-          'status': 'Completed',
-          'userId': userId,
+          description: "Wallet Funding via Paystack",
+          amount: amountPaid,
+          type: "credit",
+          status: "Completed",
+          userId: userId,
         },
         [Permission.read(Role.user(userId))]
       );
 
-      log(`Successfully processed payment for ${userEmail}.`);
+      log(`✅ Payment confirmed and wallet updated for ${userEmail}`);
     }
 
-    // --- Final Step: Tell Paystack everything is okay ---
-    return res.send('Webhook received successfully', 200);
+    // --- Final Step: Always acknowledge Paystack ---
+    return res.send("Webhook received successfully", 200);
 
   } catch (err) {
-    error(`Webhook failed: ${err.message}`);
-    return res.send(`Webhook processing failed: ${err.message}`, 500);
-  }
-};
+    error(`❌ Webhook failed: $

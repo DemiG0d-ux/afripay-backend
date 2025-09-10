@@ -1,8 +1,9 @@
-    {
-      "main": "src/main.js",
-      "type": "module",
-      "dependencies": {
-        "node-fetch": "^3.3.2"
-      }
-    }
-    
+{
+  "name": "initiate-payment",
+  "version": "1.0.0",
+  "main": "src/main.js",
+  "type": "module",
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}

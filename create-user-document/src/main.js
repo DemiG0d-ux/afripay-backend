@@ -1,101 +1,128 @@
-import { Client, Databases, Permission, Role } from 'node-appwrite';
+import { Client, Databases, Permission, Role } from "node-appwrite";
 
-export default async ({ req, res, log, error }) => {
+export default async ({ req, res, log, error, variables }) => {
   try {
-    // Initialize Appwrite client
+    // 1) Initialize Appwrite client
     const client = new Client()
-      .setEndpoint(process.env.APPWRITE_CUSTOM_ENDPOINT) 
-      .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-      .setKey(process.env.APPWRITE_API_KEY);
-    
+      .setEndpoint(variables.APPWRITE_ENDPOINT) // e.g. https://cloud.appwrite.io/v1
+      .setProject(variables.APPWRITE_FUNCTION_PROJECT_ID)
+      .setKey(variables.APPWRITE_API_KEY);
+
     const databases = new Databases(client);
-    
-    // Validate environment variables
-    if (!process.env.APPWRITE_FUNCTION_EVENT_DATA) {
-      throw new Error('No event data received');
+
+    // 2) Parse user data from event payload
+    if (!variables.APPWRITE_FUNCTION_EVENT_DATA) {
+      throw new Error("No event data received");
     }
-    
-    // Parse user data from event
-    const user = JSON.parse(process.env.APPWRITE_FUNCTION_EVENT_DATA);
-    
-    // Validate user data
+
+    const user = JSON.parse(variables.APPWRITE_FUNCTION_EVENT_DATA);
+
     if (!user || !user.$id || !user.name) {
-      throw new Error('Invalid user data: missing required fields ($id or name)');
+      throw new Error("Invalid user data: missing $id or name");
     }
-    
-    log(`Processing user creation for ${user.$id} (${user.name})`);
-    
-    // Configuration with defaults
-    const databaseId = process.env.DATABASE_ID || '686ac6ae001f516e943e';
-    const usersCollectionId = process.env.USERS_COLLECTION_ID || '686acc5e00101633025d';
-    const defaultCountry = process.env.DEFAULT_COUNTRY || 'ghana';
-    const defaultBalanceGHS = parseFloat(process.env.DEFAULT_BALANCE_GHS) || 0.0;
-    const defaultBalanceNGN = parseFloat(process.env.DEFAULT_BALANCE_NGN) || 0.0;
-    
-    // Prepare user document data
+
+    log(`➡️ Creating profile for ${user.$id} (${user.name})`);
+
+    // 3) Database & collection IDs
+    const databaseId = variables.DATABASE_ID || "686ac6ae001f516e943e";
+    const usersCollectionId =
+      variables.USERS_COLLECTION_ID || "686acc5e00101633025d";
+
+    // 4) Auto-detect country
+    let country = "ghana"; // default
+    if (user.phone && user.phone.startsWith("+234")) {
+      country = "nigeria";
+    } else if (user.phone && user.phone.startsWith("+233")) {
+      country = "ghana";
+    } else if (user.email?.endsWith(".ng")) {
+      country = "nigeria";
+    } else if (user.email?.endsWith(".gh")) {
+      country = "ghana";
+    }
+
+    // 5) Set welcome balance
+    let welcomeBalance = 0;
+    if (country === "ghana") {
+      welcomeBalance = 50; // GHS 50
+    } else if (country === "nigeria") {
+      welcomeBalance = 100; // ₦100
+    }
+
+    // 6) User document structure
     const userData = {
-      'name': user.name,
-      'email': user.email || '', // Include email if available
-      'country': defaultCountry,
-      'balanceGHS': defaultBalanceGHS,
-      'balanceNGN': defaultBalanceNGN,
-      'createdAt': new Date().toISOString(),
-      'updatedAt': new Date().toISOString()
+      name: user.name,
+      email: user.email || "",
+      phone: user.phone || "",
+      country,
+      mainWallet: {
+        currency: country === "ghana" ? "GHS" : "NGN",
+        balance: welcomeBalance,
+      },
+      savingsWallet: {
+        currency: country === "ghana" ? "GHS" : "NGN",
+        balance: 0,
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
-    
-    // Set up permissions - only the user can read and update their own document
+
+    // 7) Permissions (only user can read/update/delete)
     const permissions = [
       Permission.read(Role.user(user.$id)),
       Permission.update(Role.user(user.$id)),
-      Permission.delete(Role.user(user.$id)) // Optional: allow user to delete their own document
+      Permission.delete(Role.user(user.$id)),
     ];
-    
+
+    // 8) Create user profile document
     try {
-      // Create the user document
       const document = await databases.createDocument(
         databaseId,
         usersCollectionId,
-        user.$id, // Use user ID as document ID
+        user.$id, // use user ID as document ID
         userData,
         permissions
       );
-      
-      log(`Successfully created database document for user ${user.name} (${user.$id})`);
-      
-      return res.json({ 
-        success: true, 
-        message: 'User document created successfully',
-        documentId: document.$id
+
+      log(
+        `✅ Profile created for ${user.name} (${user.$id}) with ${welcomeBalance} ${userData.mainWallet.currency}`
+      );
+
+      return res.json({
+        success: true,
+        message: "User profile created successfully",
+        documentId: document.$id,
+        data: document,
       });
-      
     } catch (createError) {
-      // Handle duplicate document creation (409 Conflict)
-      if (createError.code === 409 || createError.message.includes('already exists')) {
-        log(`Document already exists for user ${user.$id} (${user.name})`);
-        return res.json({ 
-          success: true, 
-          message: 'User document already exists',
-          documentId: user.$id 
+      // Handle duplicate case
+      if (
+        createError.code === 409 ||
+        createError.message.includes("already exists")
+      ) {
+        log(`⚠️ Profile already exists for ${user.$id} (${user.name})`);
+        return res.json({
+          success: true,
+          message: "User profile already exists",
+          documentId: user.$id,
         });
       }
-      
-      // Handle other database errors
-      throw new Error(`Database operation failed: ${createError.message}`);
+      throw new Error("Database operation failed: " + createError.message);
     }
-    
   } catch (err) {
-    const errorMessage = `Failed to create user document: ${err.message}`;
+    const errorMessage = `❌ Failed to create user profile: ${err.message}`;
     error(errorMessage);
-    
-    // Log additional error details for debugging
+
     if (err.stack) {
-      error(`Error stack: ${err.stack}`);
+      error(err.stack);
     }
-    
-    return res.json({ 
-      success: false, 
-      message: err.message,
-      error: 'USER_DOCUMENT_CREATION_FAILED'
-    }, 400);
+
+    return res.json(
+      {
+        success: false,
+        message: err.message,
+        error: "USER_PROFILE_CREATION_FAILED",
+      },
+      400
+    );
   }
 };

@@ -1,0 +1,8 @@
+{
+  "name": "Confirm Payment Webhook",
+  "runtime": "node-18.0",
+  "execute": ["*"],
+  "events": [],
+  "timeout": 30,
+  "entrypoint": "src/main.js"
+}
